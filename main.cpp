@@ -1,5 +1,5 @@
 #include<iostream>
-#include<algorithm>
+#include<algorithm> // for sorting
 #include<set>
 
 #include<sys/types.h>
@@ -8,11 +8,14 @@
 #include<unistd.h>
 #include<fcntl.h>
 #include<sys/epoll.h>
+#include <string.h> // for strerror()
+#include<errno.h> // for errno
 
 #define MAX_EVENTS 32
 
 using namespace std;
 
+//set a socket to nonblocking state
 int set_nonblock (int fd) {
     int flags;
 #if defined (O_NONBLOCK)
@@ -24,28 +27,56 @@ int set_nonblock (int fd) {
     return ioctl(fd, FIOBIO, &flags);
 #endif
 }
+//this union is for separation long int to 4 chars
+union four_bytes{
+    long l;
+    char c[4];
+};
+
+//this function uses union "four_bytes", and prints IP:port
+void print_IPv4_and_port(long ip_in_hl, uint16_t port_in_hs) {
+    union four_bytes address; // for transforming int address to char
+    address.l = ip_in_hl;
+    cout
+     << static_cast<int>(address.c[3]) << "."
+     << static_cast<int>(address.c[2]) << "."
+     << static_cast<int>(address.c[1]) << "."
+     << static_cast<int>(address.c[0]) << ":"
+     << port_in_hs << endl;
+}
+
 
 int main()
 {
+//creating socket
     int master_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (master_socket == -1) {
-        cerr << "Unable to open socket" << endl;
+        cerr << "Unable to open socket: " << strerror( errno ) << endl;
         return 1;
     }
-
-
-    struct sockaddr_in sock_addr;
-    sock_addr.sin_family = AF_INET;
-    sock_addr.sin_port = htons(12345);
-    sock_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    cout << "Created Master socket with filedescriptor: "<< master_socket << endl;
+//creating sockaddr struct
+    socklen_t client_sock_addr_len = 0;
+    struct sockaddr_in sock_addr, /**/client_sock_addr;
+    sock_addr.sin_family = AF_INET; //IPv4
+    sock_addr.sin_port = htons(6661); //port
+    sock_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // IP addr
+//binding
     if (bind(master_socket, (struct sockaddr *) (&sock_addr), sizeof (sock_addr))) {
-        cerr << "Unable to bind address or port" << endl;
+        cerr << "Unable to bind address or port: " << strerror( errno ) << endl;
+        return 1;
+    }
+    cout << "Bind socket on ";
+    print_IPv4_and_port(ntohl(sock_addr.sin_addr.s_addr), ntohs(sock_addr.sin_port));
+//setting nonblock
+    set_nonblock(master_socket);
+//listening
+    if (listen(master_socket, SOMAXCONN)){
+        cerr << "Unable to open socket for listening: " << strerror( errno ) << endl;
         return 1;
     }
 
-    set_nonblock(master_socket);
-    listen(master_socket, SOMAXCONN);
-
+// Beggining EPoll stuff
     int EPoll = // epoll filedescriptor
             epoll_create1(0);
 
@@ -61,16 +92,24 @@ int main()
                 epoll_wait(EPoll, Events, MAX_EVENTS, -1); // wait for occured events
         for (unsigned i = 0; i < (unsigned) N; i++) {
             if (Events[i].data.fd == master_socket){ // check if event occured on Mastes Socket (someone try to connect)
-                int slave_socket = accept(master_socket, nullptr, nullptr); // accepted connection to server
+//accepting
+                int slave_socket = accept(master_socket, //0, 0);
+                                          (struct sockaddr *) (&client_sock_addr),
+                                          &client_sock_addr_len);// accepted connection to server
                 set_nonblock(slave_socket); // made slave socket nonblocking
+// print clients address
+                cout << "Client connected on ";
+                print_IPv4_and_port(ntohl(sock_addr.sin_addr.s_addr), ntohs(sock_addr.sin_port));
+
 
                 // question: why we create another struct instead of using Events[];
-                // we creates another temporary epoll_event struct to register new slavesocket in epoll by epoll_ctl()
+                // answer: we creates another temporary epoll_event struct to register new slavesocket in epoll by epoll_ctl()
                 struct epoll_event Event; // struct that registers happened events on master socket
                 Event.data.fd = slave_socket; // add slave socket fd to struct
                 Event.events = // type of event that epoll fd will return
                         EPOLLIN; // level triggered (notification when we have unread data)
                 epoll_ctl(EPoll, EPOLL_CTL_ADD, slave_socket, &Event); // add socket to epoll (in kernel)
+                cout << "Created slave socket with filedescriptor: "<< slave_socket << endl;
 
             }else { // event occured on slave socket
                 static char buffer[1024];
@@ -81,6 +120,7 @@ int main()
                     // client closed connection, let's shutdown too
                     shutdown(Events[i].data.fd, SHUT_RDWR);
                     close(Events[i].data.fd);
+                cout << "Client closed connection" << endl;
                 } else if (recv_size > 0){
                     send(Events[i].data.fd, buffer, 1024, MSG_NOSIGNAL);
                 }
