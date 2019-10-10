@@ -12,6 +12,7 @@
 #include<errno.h> // for errno
 
 #define MAX_EVENTS 32
+#define PORT 6666
 
 using namespace std;
 
@@ -35,13 +36,17 @@ union four_bytes{
 
 //this function uses union "four_bytes", and prints IP:port
 void print_IPv4_and_port(long ip_in_hl, uint16_t port_in_hs) {
-    union four_bytes address; // for transforming int address to char
-    address.l = ip_in_hl;
+    int array[4];
+    array[0] = ip_in_hl & 0xFF;
+    array[1] = (ip_in_hl >> 8) & 0xFF;
+    array[2] = (ip_in_hl >> 16) & 0xFF;
+    array[3] = (ip_in_hl >> 24) & 0xFF;
+
     cout
-     << static_cast<int>(address.c[3]) << "."
-     << static_cast<int>(address.c[2]) << "."
-     << static_cast<int>(address.c[1]) << "."
-     << static_cast<int>(address.c[0]) << ":"
+     << array[3] << "."
+     << array[2] << "."
+     << array[1] << "."
+     << array[0] << ":"
      << port_in_hs << endl;
 }
 
@@ -59,7 +64,7 @@ int main()
     socklen_t client_sock_addr_len = 0;
     struct sockaddr_in sock_addr, /**/client_sock_addr;
     sock_addr.sin_family = AF_INET; //IPv4
-    sock_addr.sin_port = htons(6661); //port
+    sock_addr.sin_port = htons(PORT); //port
     sock_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // IP addr
 //binding
     if (bind(master_socket, (struct sockaddr *) (&sock_addr), sizeof (sock_addr))) {
